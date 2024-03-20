@@ -1,0 +1,24 @@
+Bootstrap: localimage
+From: images/nvidia.sif
+
+%files
+    #./megatron /root/llm-megatron-strategic-tuning/megatron
+    ./megatron/core /root/llm-megatron-strategic-tuning/megatron/core
+    setup.py /root/llm-megatron-strategic-tuning/setup.py
+
+
+%post
+    cd /root/llm-megatron-strategic-tuning
+
+    pip install regex
+    export DS_BUILD_CPU_ADAM=1
+
+    pip install deepspeed
+    pip install transformers
+    pip install sentencepiece
+    pip install nltk
+    pip install psutil
+    
+    pip install python-config
+
+    pip install .
