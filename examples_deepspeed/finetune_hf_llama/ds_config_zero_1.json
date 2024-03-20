@@ -1,0 +1,19 @@
+{
+  "train_batch_size" : 64,
+  "train_micro_batch_size_per_gpu": 1,
+  "steps_per_print": 100,
+  "zero_optimization": {
+    "stage": 1
+  },
+  "bf16": {
+    "enabled": true
+  },
+  "activation_checkpointing": {
+    "partition_activations": true,
+    "cpu_checkpointing": true,
+    "contiguous_memory_optimization": false,
+    "number_checkpoints": null,
+    "synchronize_checkpoint_boundary": false,
+    "profile": false
+  }
+}
