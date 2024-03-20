@@ -54,6 +54,47 @@ def load_and_print_hf_weight(hf_ckpt_dir, hf_ckpt_num_of_shards):
     del d
     return loaded
 
+    '''
+    shard_idx=803
+    layer=1
+    for wid in range(1, hf_ckpt_num_of_shards + 1):
+        d = torch.load(
+            f"{hf_ckpt_dir}/pytorch_model-{wid:05d}-of-{hf_ckpt_num_of_shards:05d}.bin",
+            map_location=torch.device('cpu'))
+        
+        # Save the model checkpoint to multiple binary files
+        for key, value in d.items():
+            shard_filename = f"./models/intermediate_chkp/pytorch_model-{layer:05d}-shard-{shard_idx:05d}.bin"
+            separated_dict = {key: value}
+            torch.save(separated_dict, shard_filename)
+            print_rank_0(key)
+            layer = layer +1 
+
+    return layer
+    '''
+    '''
+    # Using psutil to print CPU memory usage
+    import psutil
+    
+    hf_ckpt_num_of_shards = 803
+    for wid in range(1, hf_ckpt_num_of_shards + 1):
+        d = torch.load(
+            f"./models/intermediate_chkp/pytorch_model-{wid:05d}-shard-00803.bin",
+            map_location=torch.device('cpu'))
+
+        #print('RAM memory % used:', psutil.virtual_memory()[2])
+        #print('RAM Used (GB):', psutil.virtual_memory()[3]/1000000000)
+        for k in d:
+            print_rank_0(k)
+            print_rank_0(psutil.virtual_memory()[3]/1000000000)
+            print_rank_0(f"./models/intermediate_chkp/pytorch_model-{wid:05d}-shard-00803.bin")
+            assert k not in loaded
+            loaded[k] = d[k].clone()
+
+        del d
+    return loaded
+    '''
+
 
 def print_distinct_weights(model):
     print_rank_0(
