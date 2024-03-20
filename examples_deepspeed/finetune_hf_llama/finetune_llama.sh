@@ -1,14 +1,18 @@
+#DS_CONFIG=./examples_deepspeed/finetune_hf_llama/ds_config.json
 DS_CONFIG=./examples_deepspeed/finetune_hf_llama/ds_config.json
-DATASET_PATH=./alpaca_data.json
+#DATASET_PATH=./examples_deepspeed/finetune_hf_llama/data/alpaca_data.json
+DATASET_PATH=./examples_deepspeed/finetune_hf_llama/data/alpaca_data.json
+
 # dataset link: https://github.com/tatsu-lab/stanford_alpaca/blob/main/alpaca_data.json
 
-HF_LLAMA_PATH=/data/llama-7b/
+HF_LLAMA_PATH=./models/llama-7b
+#HF_LLAMA_PATH=/data/llama-7b/
 # weights link: https://huggingface.co/huggyllama/llama-7b
 
-MICRO_BATCH_SIZE=16
-GLOBAL_BATCH_SIZE=256
-TP=2
-PP=2
+MICRO_BATCH_SIZE=1
+GLOBAL_BATCH_SIZE=8
+TP=4
+PP=4
 # require to align with weight dimensions
 HIDDEN_SIZE=4096
 FFN_HIDDEN_SIZE=11008
@@ -44,13 +48,21 @@ cat <<EOT > $DS_CONFIG
 EOT
 
 
-covert_args="deepspeed tools/hf2megads_weight_converter.py \
+covert_args="deepspeed ./tools/hf2megads_weight_converter.py \
 --hf-ckpt-num-shards 2 \
 --origin-hf-ckpt-dir $HF_LLAMA_PATH \
 --save $MEGA_DS_LLAMA_PATH"
 
 finetune_args="deepspeed finetune_llama.py \
 --load $MEGA_DS_LLAMA_PATH"
+
+#finetune_args="python -m torch.distributed.run \
+#--nnodes="$SLURM_NNODES" \
+#--nproc-per-node=gpu \
+#--rdzv-id="$SLURM_JOBID" \
+#--rdzv-endpoint=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1) \
+#--rdzv-backend="c10d" \
+#finetune_llama.py"
 
 comm_args="--tensor-model-parallel-size $TP \
 --pipeline-model-parallel-size $PP \
