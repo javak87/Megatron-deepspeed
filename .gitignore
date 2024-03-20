@@ -21,3 +21,12 @@ logs
 
 # Data folder
 bookcorpus_data/
+
+images/*.sif
+/models/hf_model/*
+/models/intermediate_chkp/*
+/models/megatron_model/*
+tensorboard_output/*
+examples_deepspeed/finetune_hf_llama/data/*
+.env
+
