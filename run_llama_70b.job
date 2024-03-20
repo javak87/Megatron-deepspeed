@@ -1,0 +1,188 @@
+#!/bin/bash -l
+#SBATCH --output ./slurm_logs/slurm-%x-%j.out
+#SBATCH --error ./slurm_logs/slurm-%x-%j.out
+#SBATCH --chdir ./
+#SBATCH --job-name megatron
+#
+#SBATCH --nodes=2
+#SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=0
+#
+
+#SBATCH --constraint="gpu"
+#SBATCH --gres=gpu:a100:4
+
+###SBATCH --nodelist=ravh1001,ravh1002,ravh1003,ravh1004
+
+#
+# Wall clock limit (max is 24 hours):
+#SBATCH --time=00:35:00
+
+source /etc/profile.d/modules.sh
+module purge
+module load apptainer
+source .env
+
+
+######################################
+# Change the below configurations here
+DS_CONFIG=./examples_deepspeed/finetune_hf_llama/ds_config_zero_1.json
+DATASET_PATH=./examples_deepspeed/finetune_hf_llama/data/alpaca_data.json
+
+#TOKENIZER_PATH=./tmp/tokenizer.model # offical llama tokenizer.model
+HF_LLAMA_PATH=./models/hf_model/Llama-2-70b-hf
+
+TP=8
+PP=8
+ZERO_STAGE=1
+
+MEGA_DS_LLAMA_PATH=./"Llama-2-70b-hf-mega-ds-T${TP}_P${PP}_ZERO_${ZERO_STAGE}_NODES_${SLURM_NNODES}_LongAlpaca-16k-length"
+
+#HIDDEN_SIZE=2048 # e.g. llama-13b: 5120
+#FFN_HIDDEN_SIZE=5504 # e.g. llama-13b: 13824
+#NUM_LAYERS=24 # e.g. llama-13b: 40
+#NUM_HEADS=16 # e.g. llama-13b: 40
+#SEQ_LENGTH=2048
+#NUM_KV_HEADS=4 # llama2 70B uses GQA
+
+HIDDEN_SIZE=8192
+FFN_HIDDEN_SIZE=28672
+NUM_LAYERS=80
+NUM_HEADS=64
+#NUM_KV_HEADS=8 # llama2 70B uses GQA
+
+SEQ_LENGTH=4096
+
+MICRO_BATCH_SIZE=1
+GLOBAL_BATCH_SIZE=64 # e.g. llama: 4M tokens
+TRAIN_STEPS=250000 # e.g. llama: 1T tokens / 4M tokens_per_batch = 250000 steps
+LR=3e-4
+MIN_LR=3e-5
+LR_WARMUP_STEPS=2000
+WEIGHT_DECAY=0.1
+GRAD_CLIP=1
+
+## Activation checkpointing saves GPU memory, but reduces training speed
+# activation_checkpoint="true"
+activation_checkpoint="false"
+
+# Below configuration required for llama model as per llama paper
+# --no-query-key-layer-scaling \
+# --attention-dropout 0 \
+# --hidden-dropout 0 \
+# --use-rotary-position-embeddings \
+# --untie-embeddings-and-output-weights \
+# --swiglu \
+# --normalization rmsnorm \
+# --disable-bias-linear \
+######################################
+cat <<EOT > $DS_CONFIG
+{
+  "train_batch_size" : $GLOBAL_BATCH_SIZE,
+  "train_micro_batch_size_per_gpu": $MICRO_BATCH_SIZE,
+  "steps_per_print": 100,
+  "zero_optimization": {
+    "stage": $ZERO_STAGE
+  },
+  "bf16": {
+    "enabled": true
+  },
+  "activation_checkpointing": {
+    "partition_activations": true,
+    "cpu_checkpointing": true,
+    "contiguous_memory_optimization": false,
+    "number_checkpoints": null,
+    "synchronize_checkpoint_boundary": false,
+    "profile": false
+  }
+}
+EOT
+
+
+APPTAINER_ARGS="srun apptainer exec \
+	  --nv \
+    --contain \
+    --cleanenv \
+    --pwd /root/llm-megatron-strategic-tuning/ \
+    --bind .:/root/llm-megatron-strategic-tuning \
+    --bind ~/.cache/huggingface:/root/.cache/huggingface \
+    --env HUGGING_FACE_HUB_TOKEN="$HUGGINGFACE_TOKEN" \
+    --env WANDB_MODE="disabled" \
+    --env HF_HOME="/root/.cache/huggingface" \
+	  ./images/megatron_07.sif"
+
+DISTRIBUTED_ARGS="python -m torch.distributed.run \
+    --nnodes="$SLURM_NNODES" \
+    --nproc-per-node=gpu \
+    --rdzv-id="$SLURM_JOBID" \
+    --rdzv-endpoint=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1) \
+    --rdzv-backend="c10d""
+
+MODEL_ARGS="--tensor-model-parallel-size $TP \
+    --pipeline-model-parallel-size $PP \
+    --lr-warmup-iters 2000 \
+    --weight-decay 0.1 \
+    --clip-grad 1 \
+    --num-layers $NUM_LAYERS \
+    --hidden-size $HIDDEN_SIZE \
+    --num-attention-heads $NUM_HEADS \
+    --ffn-hidden-size $FFN_HIDDEN_SIZE \
+    --attention-dropout 0 \
+    --hidden-dropout 0 \
+    --no-query-key-layer-scaling \
+    --disable-bias-linear \
+    --normalization rmsnorm \
+    --use-rotary-position-embeddings \
+    --untie-embeddings-and-output-weights \
+    --swiglu \
+    --seq-length $SEQ_LENGTH \
+    --max-position-embeddings $SEQ_LENGTH \
+    --micro-batch-size $MICRO_BATCH_SIZE \
+    --global-batch-size $GLOBAL_BATCH_SIZE \
+    --train-iters 16000 \
+    --lr 2e-5 \
+    --tensorboard-dir tensorboard_output \
+    --lr-decay-iters 320000 \
+    --lr-decay-style cosine \
+    --log-interval 1 \
+    --eval-iters 100 \
+    --eval-interval 100 \
+    --data-path $DATASET_PATH \
+    --save-interval 1500 \
+    --split 100,0,0 \
+    --bf16 \
+    --zero-stage 0 \
+    --tokenizer-type HFTokenizer \
+    --tokenizer-model $HF_LLAMA_PATH \
+    --deepspeed_config $DS_CONFIG \
+    --deepspeed \
+    --distributed-backend nccl \
+    --num-workers 0 \
+    --no-masked-softmax-fusion \
+    --no-bias-gelu-fusion \
+    --no-bias-dropout-fusion \
+    --no-gradient-accumulation-fusion \
+    --repeated-dataloader"
+
+#--num-key-value-heads $NUM_KV_HEADS"
+
+  
+HF_TO_MEGA_ARGS="$APPTAINER_ARGS $DISTRIBUTED_ARGS \
+                  ./tools/hf2megads_weight_converter.py \
+                  --hf-ckpt-num-shards 15 \
+                  --origin-hf-ckpt-dir $HF_LLAMA_PATH \
+                  --save $MEGA_DS_LLAMA_PATH \
+                  $MODEL_ARGS"
+
+FINE_TUNE_ARGS="$APPTAINER_ARGS $DISTRIBUTED_ARGS \
+                finetune_llama.py \
+                --load $MEGA_DS_LLAMA_PATH $MODEL_ARGS"
+
+if [ "$1" = "convert" ]; then
+    full_cmd="$HF_TO_MEGA_ARGS"
+else
+    full_cmd="$FINE_TUNE_ARGS"
+fi
+
+eval "$full_cmd"
